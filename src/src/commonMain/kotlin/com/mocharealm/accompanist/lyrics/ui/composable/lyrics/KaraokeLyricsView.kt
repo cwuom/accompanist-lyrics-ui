@@ -3,7 +3,6 @@ package com.mocharealm.accompanist.lyrics.ui.composable.lyrics
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -34,7 +33,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.BlendMode
@@ -59,7 +57,6 @@ import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
 import com.mocharealm.accompanist.lyrics.ui.utils.isRtl
 import com.mocharealm.accompanist.lyrics.ui.utils.modifier.dynamicFadingEdge
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
@@ -72,7 +69,6 @@ import kotlinx.coroutines.withContext
  * - Rendering synced lines
  * - Displaying breathing dots during instrumental interludes
  * - Determining active and accompaniment lines
- * - Orchestrating layout pre-calculation using [NativeTextEngine]
  *
  * @param listState The scroll state for the lazy list.
  * @param lyrics The lyrics data to display.
