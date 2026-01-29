@@ -180,19 +180,44 @@ fun KaraokeLyricsView(
 
     val firstFocusedLineIndex by remember(lyrics.lines) {
         derivedStateOf {
-            val rawIndex = lyrics.getCurrentFirstHighlightLineIndexByTime(currentTimeMs())
-            val line = lyrics.lines.getOrNull(rawIndex) as? KaraokeLine
-            if (line != null && line.isAccompaniment) {
-                var newIndex = rawIndex
-                for (i in rawIndex downTo 0) {
-                    if (!(lyrics.lines[i] as KaraokeLine).isAccompaniment) {
-                        newIndex = i
-                        break
-                    }
+            val time = currentTimeMs()
+            val allActiveIndices = lyrics.getCurrentAllHighlightLineIndicesByTime(time)
+
+            if (allActiveIndices.isNotEmpty()) {
+                val currentMainLine = allActiveIndices.find { index ->
+                    val line = lyrics.lines.getOrNull(index)
+                    line !is KaraokeLine || !line.isAccompaniment
                 }
-                newIndex
+
+                if (currentMainLine != null) {
+                    currentMainLine
+                } else {
+                    val firstActiveAccomp = allActiveIndices.first()
+                    var targetIndex = firstActiveAccomp
+                    for (i in firstActiveAccomp downTo 0) {
+                        val line = lyrics.lines.getOrNull(i)
+                        if (line !is KaraokeLine || !line.isAccompaniment) {
+                            targetIndex = i
+                            break
+                        }
+                    }
+                    targetIndex
+                }
             } else {
-                rawIndex
+                val nextIndex = lyrics.lines.indexOfFirst { it.start > time }
+                if (nextIndex != -1) {
+                    var targetIndex = nextIndex
+                    for (i in nextIndex downTo 0) {
+                        val line = lyrics.lines.getOrNull(i)
+                        if (line !is KaraokeLine || !line.isAccompaniment) {
+                            targetIndex = i
+                            break
+                        }
+                    }
+                    targetIndex
+                } else {
+                    lyrics.lines.lastIndex
+                }
             }
         }
     }
