@@ -3,7 +3,6 @@ package com.mocharealm.accompanist.lyrics.ui.composable.lyrics
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -14,7 +13,8 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -36,9 +36,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.LookaheadScope
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -56,7 +63,7 @@ import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeAlignment
 import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeLine
 import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
 import com.mocharealm.accompanist.lyrics.ui.utils.isRtl
-import com.mocharealm.accompanist.lyrics.ui.utils.modifier.dynamicFadingEdge
+import com.mocharealm.accompanist.lyrics.ui.utils.modifier.springPlacement
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -126,6 +133,8 @@ fun KaraokeLyricsView(
     val stableOffset = remember(offset) { offset }
     val stableOffsetPx =
         remember(stableOffset) { with(density) { stableOffset.toPx().fastRoundToInt() } }
+    val keepAliveZone = 300.dp
+    val keepAliveZonePx = with(density) { keepAliveZone.toPx() }
     val stableBlendMode = remember(blendMode) { blendMode }
 
     val textMeasurer = rememberTextMeasurer()
@@ -219,24 +228,24 @@ fun KaraokeLyricsView(
         }
     }
 
-    val isDuoView by remember {
-        derivedStateOf {
-            var hasStart = false
-            var hasEnd = false
-            if (lyrics.lines.isEmpty()) return@derivedStateOf false
-            for (line in lyrics.lines) {
-                if (line is KaraokeLine) {
-                    when (line.alignment) {
-                        KaraokeAlignment.Start -> hasStart = true
-                        KaraokeAlignment.End -> hasEnd = true
-                        else -> {}
-                    }
-                }
-                if (hasStart && hasEnd) break
-            }
-            hasStart && hasEnd
-        }
-    }
+//    val isDuoView by remember {
+//        derivedStateOf {
+//            var hasStart = false
+//            var hasEnd = false
+//            if (lyrics.lines.isEmpty()) return@derivedStateOf false
+//            for (line in lyrics.lines) {
+//                if (line is KaraokeLine) {
+//                    when (line.alignment) {
+//                        KaraokeAlignment.Start -> hasStart = true
+//                        KaraokeAlignment.End -> hasEnd = true
+//                        else -> {}
+//                    }
+//                }
+//                if (hasStart && hasEnd) break
+//            }
+//            hasStart && hasEnd
+//        }
+//    }
 
     val firstLine = lyrics.lines.firstOrNull()
 
@@ -274,6 +283,12 @@ fun KaraokeLyricsView(
 
     val scrollInCode = remember { mutableStateOf(false) }
 
+    val isManualScrolling by remember {
+        derivedStateOf {
+            listState.isScrollInProgress && !scrollInCode.value
+        }
+    }
+
     LaunchedEffect(
         firstFocusedLineIndex,
         layoutCache,
@@ -283,13 +298,15 @@ fun KaraokeLyricsView(
             val items = listState.layoutInfo.visibleItemsInfo
             val targetItem = items.firstOrNull { it.index == firstFocusedLineIndex }
             val scrollOffset =
-                (targetItem?.offset?.minus(listState.layoutInfo.viewportStartOffset + stableOffsetPx))?.toFloat()
+                (targetItem?.offset?.minus(listState.layoutInfo.viewportStartOffset + stableOffsetPx + keepAliveZonePx))
             try {
                 scrollInCode.value = true
                 if (scrollOffset != null) {
-                    listState.animateScrollBy(scrollOffset, tween(400, 0, EaseOut))
+                    listState.scrollBy(scrollOffset)
                 } else {
-                    listState.animateScrollToItem(firstFocusedLineIndex, -stableOffsetPx)
+                    listState.animateScrollToItem(firstFocusedLineIndex,
+                        (-stableOffsetPx-keepAliveZonePx).toInt()
+                    )
                 }
             } catch (_: Exception) {
             } finally {
@@ -297,212 +314,257 @@ fun KaraokeLyricsView(
             }
         }
     }
-
-    Crossfade(lyrics) { lyrics ->
-        LazyColumn(
-            state = listState,
-            modifier = modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = stableOffset)
-        ) {
-            itemsIndexed(
-                items = lyrics.lines,
-                key = { index, line -> "${line.start}-${line.end}-$index" }
-            ) { index, line ->
-                val isCurrentFocusLine by rememberUpdatedState(index in allFocusedLineIndex)
-                val isLineRtl =
-                    when(line) {
-                        is KaraokeLine-> {
-                            remember(line.syllables) { line.syllables.any { it.content.isRtl() } }
+    LookaheadScope {
+        Crossfade(lyrics) { lyrics ->
+            Box(modifier = modifier.clipToBounds()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            compositingStrategy = CompositingStrategy.Offscreen
                         }
-                        else -> false
-                    }
-                val isLineRightAligned = when (line) {
-                    is KaraokeLine-> {
-                        remember { line.alignment == KaraokeAlignment.End }
-                    }
-                    else -> false
-                }
-                val isVisualRightAligned = remember(isLineRightAligned, isLineRtl) {
-                    if (isLineRightAligned) !isLineRtl
-                    else isLineRtl
-                }
+                        .drawWithCache {
+                            onDrawWithContent {
+                                drawContent()
+                                val topFade = 20.dp.toPx() / size.height
+                                val bottomFade = 100.dp.toPx() / size.height
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        0f to Color.Transparent,
+                                        topFade to Color.Black,
+                                        1f - bottomFade to Color.Black,
+                                        1f to Color.Transparent
+                                    ),
+                                    blendMode = BlendMode.DstIn
+                                )
+                            }
+                        }
+                        .layout { measurable, constraints ->
+                            val extraHeightPx = (keepAliveZone * 2).roundToPx()
 
-                Column(
-                    modifier = Modifier.fillMaxWidth().dynamicFadingEdge(listState, index),
-                    horizontalAlignment = if (isVisualRightAligned) Alignment.End else Alignment.Start
+                            val placeable = measurable.measure(
+                                constraints.copy(
+                                    maxHeight = constraints.maxHeight + extraHeightPx
+                                )
+                            )
+
+                            layout(constraints.maxWidth, constraints.maxHeight) {
+                                placeable.place(0, -(keepAliveZone.roundToPx()))
+                            }
+                        },
+                    contentPadding = PaddingValues(vertical = stableOffset + keepAliveZone)
                 ) {
-                    val animDuration = 600
-
-                    val previousLine = lyrics.lines.getOrNull(index - 1)
-
-                    val showDotsInterlude by remember(line, previousLine) {
-                        derivedStateOf {
-                            val currentTime = currentPosition()
-                            (previousLine != null && (line.start - previousLine.end > 5000) && (currentTime in previousLine.end..line.start))
-                        }
-                    }
-                    val showDotsIntro by remember(firstLine) {
-                        derivedStateOf {
-                            haveDotsIntro && (currentTimeMs() in 0 until firstLine!!.start) && index == 0
-                        }
-                    }
-
-                    AnimatedVisibility(showDotsInterlude || showDotsIntro) {
-                        KaraokeBreathingDots(
-                            alignment = when (val line = previousLine ?: firstLine) {
-                                is KaraokeLine -> line.alignment
-                                is SyncedLine -> if (line.content.isRtl()) KaraokeAlignment.End else KaraokeAlignment.Start
-                                else -> KaraokeAlignment.Start
-                            },
-                            startTimeMs = previousLine?.end ?: 0,
-                            endTimeMs = if (showDotsIntro) firstLine!!.start else line.start,
-                            currentTimeProvider = timeProvider,
-                            defaults = breathingDotsDefaults,
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-                    }
-
-                    val nextPendingLineIndex by remember(lyrics, currentTimeMs()) {
-                        derivedStateOf {
-                            val time = currentTimeMs()
-                            val index = lyrics.lines.indexOfFirst { it.start > time }
-                            if (index == -1) lyrics.lines.size - 1 else index
-                        }
-                    }
-
-                    val distanceWeightState =
-                        remember(useBlurEffect, allFocusedLineIndex, nextPendingLineIndex) {
-                            derivedStateOf {
-                                if (!useBlurEffect) return@derivedStateOf 0
-
-                                val (baseStart, baseEnd) = if (allFocusedLineIndex.isNotEmpty()) {
-                                    allFocusedLineIndex.first() to allFocusedLineIndex.last()
-                                } else {
-                                    nextPendingLineIndex to nextPendingLineIndex
+                    itemsIndexed(
+                        items = lyrics.lines,
+                        key = { index, line -> "${line.start}-${line.end}-$index" }
+                    ) { index, line ->
+                        val isCurrentFocusLine by rememberUpdatedState(index in allFocusedLineIndex)
+                        val isLineRtl =
+                            when (line) {
+                                is KaraokeLine -> {
+                                    remember(line.syllables) { line.syllables.any { it.content.isRtl() } }
                                 }
 
-                                when {
-                                    index < baseStart -> baseStart - index
-                                    index > baseEnd -> index - baseEnd
-                                    else -> 0
-                                }.coerceAtMost(10)
+                                else -> false
+                            }
+                        val isLineRightAligned = when (line) {
+                            is KaraokeLine -> {
+                                remember { line.alignment == KaraokeAlignment.End }
+                            }
+
+                            else -> false
+                        }
+                        val isVisualRightAligned = remember(isLineRightAligned, isLineRtl) {
+                            if (isLineRightAligned) !isLineRtl
+                            else isLineRtl
+                        }
+                        val nextPendingLineIndex by remember(lyrics, currentTimeMs()) {
+                            derivedStateOf {
+                                val time = currentTimeMs()
+                                val index = lyrics.lines.indexOfFirst { it.start > time }
+                                if (index == -1) lyrics.lines.size - 1 else index
                             }
                         }
 
-                    val blurRadiusState = animateFloatAsState(
-                        targetValue = if (distanceWeightState.value > 0 && (!listState.isScrollInProgress || scrollInCode.value)) {
-                            distanceWeightState.value * 4f
-                        } else {
-                            0f
-                        },
-                        animationSpec = tween(300),
-                    )
+                        val distanceWeightState = remember(useBlurEffect, allFocusedLineIndex, nextPendingLineIndex) {
+                            derivedStateOf {
+                                if (!useBlurEffect) return@derivedStateOf 0
 
-                    when (line) {
-                        is KaraokeLine -> {
-                            if (!line.isAccompaniment) {
-                                LyricsLineItem(
-                                    isFocused = isCurrentFocusLine,
-                                    isRightAligned = isVisualRightAligned,
-                                    onLineClicked = { onLineClicked(line) },
-                                    onLinePressed = { onLinePressed(line) },
-                                    blurRadius = { blurRadiusState.value },
-                                    blendMode = stableBlendMode,
-                                ) {
-                                    KaraokeLineText(
-                                        line = line,
-                                        currentTimeProvider = timeProvider,
-                                        normalLineTextStyle = stableNormalTextStyle,
-                                        accompanimentLineTextStyle = stableAccompanimentTextStyle,
-                                        activeColor = textColor,
-                                        blendMode = stableBlendMode,
-                                        showDebugRectangles = showDebugRectangles,
-                                        precalculatedLayouts = layoutCache[index]
-                                    )
+                                val start = allFocusedLineIndex.firstOrNull() ?: nextPendingLineIndex
+                                val end = allFocusedLineIndex.lastOrNull() ?: nextPendingLineIndex
+
+                                maxOf(0, start - index, index - end)
+                            }
+                        }
+
+                        val dynamicStiffness by remember(distanceWeightState.value) {
+                            derivedStateOf {
+                                (120f - (distanceWeightState.value * 20f)).coerceAtLeast(20f)
+                            }
+                        }
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .springPlacement(
+                                    this@LookaheadScope,
+                                    "${line.start}-${line.end}-$index",
+                                    isManualScrolling,
+                                    stiffness = dynamicStiffness
+                                ),
+                            horizontalAlignment = if (isVisualRightAligned) Alignment.End else Alignment.Start
+                        ) {
+                            val animDuration = 600
+
+                            val previousLine = lyrics.lines.getOrNull(index - 1)
+
+                            val showDotsInterlude by remember(line, previousLine) {
+                                derivedStateOf {
+                                    val currentTime = currentPosition()
+                                    (previousLine != null && (line.start - previousLine.end > 5000) && (currentTime in previousLine.end..line.start))
                                 }
-                            } else {
-                                val visibilityRange = accompanimentVisibilityRanges[index]
-                                val isAccompanimentVisible by remember(visibilityRange) {
-                                    derivedStateOf {
-                                        val currentTime = currentTimeMs()
-                                        if (visibilityRange != null) {
-                                            currentTime in visibilityRange
-                                        } else {
-                                            currentTime >= (line.start - animDuration) && currentTime <= (line.end + animDuration)
+                            }
+                            val showDotsIntro by remember(firstLine) {
+                                derivedStateOf {
+                                    haveDotsIntro && (currentTimeMs() in 0 until firstLine!!.start) && index == 0
+                                }
+                            }
+
+                            AnimatedVisibility(showDotsInterlude || showDotsIntro) {
+                                KaraokeBreathingDots(
+                                    alignment = when (val line = previousLine ?: firstLine) {
+                                        is KaraokeLine -> line.alignment
+                                        is SyncedLine -> if (line.content.isRtl()) KaraokeAlignment.End else KaraokeAlignment.Start
+                                        else -> KaraokeAlignment.Start
+                                    },
+                                    startTimeMs = previousLine?.end ?: 0,
+                                    endTimeMs = if (showDotsIntro) firstLine!!.start else line.start,
+                                    currentTimeProvider = timeProvider,
+                                    defaults = breathingDotsDefaults,
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+                            }
+
+
+                            val blurRadiusState = animateFloatAsState(
+                                targetValue =
+                                    if (!useBlurEffect) 0f
+                                    else if (distanceWeightState.value > 0 && (!listState.isScrollInProgress || scrollInCode.value)) {
+                                        distanceWeightState.value * 4f
+                                    } else 0f,
+                                animationSpec = tween(300),
+                            )
+
+                            when (line) {
+                                is KaraokeLine -> {
+                                    if (!line.isAccompaniment) {
+                                        LyricsLineItem(
+                                            isFocused = isCurrentFocusLine,
+                                            isRightAligned = isVisualRightAligned,
+                                            onLineClicked = { onLineClicked(line) },
+                                            onLinePressed = { onLinePressed(line) },
+                                            blurRadius = { blurRadiusState.value },
+                                            blendMode = stableBlendMode,
+                                        ) {
+                                            KaraokeLineText(
+                                                line = line,
+                                                currentTimeProvider = timeProvider,
+                                                normalLineTextStyle = stableNormalTextStyle,
+                                                accompanimentLineTextStyle = stableAccompanimentTextStyle,
+                                                activeColor = textColor,
+                                                blendMode = stableBlendMode,
+                                                showDebugRectangles = showDebugRectangles,
+                                                precalculatedLayouts = layoutCache[index]
+                                            )
+                                        }
+                                    } else {
+                                        val visibilityRange = accompanimentVisibilityRanges[index]
+                                        val isAccompanimentVisible by remember(visibilityRange) {
+                                            derivedStateOf {
+                                                val currentTime = currentTimeMs()
+                                                if (visibilityRange != null) {
+                                                    currentTime in visibilityRange
+                                                } else {
+                                                    currentTime >= (line.start - animDuration) && currentTime <= (line.end + animDuration)
+                                                }
+                                            }
+                                        }
+
+                                        AnimatedVisibility(
+                                            visible = isAccompanimentVisible,
+                                            enter = scaleIn(
+                                                tween(animDuration),
+                                                transformOrigin = TransformOrigin(
+                                                    if (isVisualRightAligned) 1f else 0f, 0f
+                                                )
+                                            ) + fadeIn(tween(animDuration)) + slideInVertically(
+                                                tween(
+                                                    animDuration
+                                                )
+                                            ) + expandVertically(tween(animDuration)),
+                                            exit = scaleOut(
+                                                tween(animDuration),
+                                                transformOrigin = TransformOrigin(
+                                                    if (isVisualRightAligned) 1f else 0f, 0f
+                                                )
+                                            ) + fadeOut(tween(animDuration)) + slideOutVertically(
+                                                tween(
+                                                    animDuration
+                                                )
+                                            ) + shrinkVertically(tween(animDuration)),
+                                        ) {
+                                            LyricsLineItem(
+                                                isFocused = isCurrentFocusLine,
+                                                isRightAligned = isVisualRightAligned,
+                                                onLineClicked = { onLineClicked(line) },
+                                                onLinePressed = { onLinePressed(line) },
+                                                blurRadius = { blurRadiusState.value },
+                                                blendMode = stableBlendMode,
+                                                activeAlpha = 0.6f,
+                                                inactiveAlpha = 0.2f
+                                            ) {
+                                                KaraokeLineText(
+                                                    line = line,
+                                                    currentTimeProvider = timeProvider,
+                                                    normalLineTextStyle = stableNormalTextStyle,
+                                                    accompanimentLineTextStyle = stableAccompanimentTextStyle,
+                                                    activeColor = textColor,
+                                                    blendMode = stableBlendMode,
+                                                    precalculatedLayouts = layoutCache[index]
+                                                )
+                                            }
                                         }
                                     }
                                 }
 
-                                AnimatedVisibility(
-                                    visible = isAccompanimentVisible,
-                                    enter = scaleIn(
-                                        tween(animDuration), transformOrigin = TransformOrigin(
-                                            if (isVisualRightAligned) 1f else 0f, 0f
-                                        )
-                                    ) + fadeIn(tween(animDuration)) + slideInVertically(
-                                        tween(
-                                            animDuration
-                                        )
-                                    ) + expandVertically(tween(animDuration)),
-                                    exit = scaleOut(
-                                        tween(animDuration), transformOrigin = TransformOrigin(
-                                            if (isVisualRightAligned) 1f else 0f, 0f
-                                        )
-                                    ) + fadeOut(tween(animDuration)) + slideOutVertically(
-                                        tween(
-                                            animDuration
-                                        )
-                                    ) + shrinkVertically(tween(animDuration)),
-                                ) {
+                                is SyncedLine -> {
+                                    val isLineRtl = remember(line.content) { line.content.isRtl() }
                                     LyricsLineItem(
                                         isFocused = isCurrentFocusLine,
-                                        isRightAligned = isVisualRightAligned,
+                                        isRightAligned = isLineRtl,
                                         onLineClicked = { onLineClicked(line) },
                                         onLinePressed = { onLinePressed(line) },
                                         blurRadius = { blurRadiusState.value },
                                         blendMode = stableBlendMode,
-                                        activeAlpha = 0.6f,
-                                        inactiveAlpha = 0.2f
                                     ) {
-                                        KaraokeLineText(
+                                        SyncedLineText(
                                             line = line,
-                                            currentTimeProvider = timeProvider,
-                                            normalLineTextStyle = stableNormalTextStyle,
-                                            accompanimentLineTextStyle = stableAccompanimentTextStyle,
-                                            activeColor = textColor,
-                                            blendMode = stableBlendMode,
-                                            precalculatedLayouts = layoutCache[index]
+                                            isLineRtl = isLineRtl,
+                                            textStyle = stableNormalTextStyle.copy(lineHeight = 1.2.em),
+                                            textColor = textColor,
                                         )
                                     }
                                 }
                             }
                         }
-
-                        is SyncedLine -> {
-                            val isLineRtl = remember(line.content) { line.content.isRtl() }
-                            LyricsLineItem(
-                                isFocused = isCurrentFocusLine,
-                                isRightAligned = isLineRtl,
-                                onLineClicked = { onLineClicked(line) },
-                                onLinePressed = { onLinePressed(line) },
-                                blurRadius = { blurRadiusState.value },
-                                blendMode = stableBlendMode,
-                            ) {
-                                SyncedLineText(
-                                    line = line,
-                                    isLineRtl = isLineRtl,
-                                    textStyle = stableNormalTextStyle.copy(lineHeight = 1.2.em),
-                                    textColor = textColor,
-                                )
-                            }
-                        }
+                    }
+                    item("BottomSpacing") {
+                        Spacer(
+                            modifier = Modifier.fillMaxWidth().height(2000.dp)
+                        )
                     }
                 }
-            }
-            item("BottomSpacing") {
-                Spacer(
-                    modifier = Modifier.fillMaxWidth().height(2000.dp)
-                )
             }
         }
     }

@@ -24,7 +24,7 @@ fun SyncedLineText(
     Column(
         modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp, horizontal = 16.dp),
+            .padding(vertical = 12.dp, horizontal = 16.dp),
         horizontalAlignment = if (isLineRtl) Alignment.End else Alignment.Start
     ) {
         Text(
