@@ -184,30 +184,72 @@ fun KaraokeLyricsView(
 
     val timeProvider = remember { currentPosition }
 
-    val firstFocusedLineIndex by remember(lyrics.lines) {
+    val lineClusters = remember(lyrics.lines) {
+        val clusters = mutableListOf<List<Int>>()
+        if (lyrics.lines.isEmpty()) return@remember clusters
+
+        var currentCluster = mutableListOf<Int>()
+        var clusterEnd = -1
+
+        lyrics.lines.forEachIndexed { index, line ->
+            if (currentCluster.isEmpty()) {
+                currentCluster.add(index)
+                clusterEnd = line.end
+            } else {
+                if (line.start < clusterEnd) {
+                    currentCluster.add(index)
+                    clusterEnd = maxOf(clusterEnd, line.end)
+                } else {
+                    clusters.add(currentCluster)
+                    currentCluster = mutableListOf(index)
+                    clusterEnd = line.end
+                }
+            }
+        }
+        if (currentCluster.isNotEmpty()) {
+            clusters.add(currentCluster)
+        }
+        clusters
+    }
+
+    val accompanimentToMainMap = remember(lyrics.lines) {
+        val map = mutableMapOf<Int, Int>()
+        val mainLinesIndices = lyrics.lines.indices.filter { index ->
+            val line = lyrics.lines[index]
+            line !is KaraokeLine || !line.isAccompaniment
+        }
+        if (mainLinesIndices.isNotEmpty()) {
+            lyrics.lines.forEachIndexed { index, line ->
+                if (line is KaraokeLine && line.isAccompaniment) {
+                    val anchorIndex =
+                        mainLinesIndices.findLast { it <= index } ?: mainLinesIndices.first()
+                    map[index] = anchorIndex
+                }
+            }
+        }
+        map
+    }
+
+    val firstFocusedLineIndex by remember(lyrics.lines, lineClusters) {
         derivedStateOf {
             val time = currentTimeMs()
             val allActiveIndices = lyrics.getCurrentAllHighlightLineIndicesByTime(time)
 
             if (allActiveIndices.isNotEmpty()) {
-                val currentMainLine = allActiveIndices.find { index ->
-                    val line = lyrics.lines.getOrNull(index)
-                    line !is KaraokeLine || !line.isAccompaniment
-                }
-
-                if (currentMainLine != null) {
-                    currentMainLine
-                } else {
-                    val firstActiveAccomp = allActiveIndices.first()
-                    var targetIndex = firstActiveAccomp
-                    for (i in firstActiveAccomp downTo 0) {
-                        val line = lyrics.lines.getOrNull(i)
-                        if (line !is KaraokeLine || !line.isAccompaniment) {
-                            targetIndex = i
-                            break
-                        }
+                val firstActiveIdx = allActiveIndices.first()
+                val cluster = lineClusters.find { it.contains(firstActiveIdx) }
+                if (cluster != null) {
+                    val firstMainInCluster = cluster.find { idx ->
+                        val line = lyrics.lines.getOrNull(idx)
+                        line !is KaraokeLine || !line.isAccompaniment
                     }
-                    targetIndex
+                    firstMainInCluster ?: cluster.first()
+                } else {
+                    val currentMainLine = allActiveIndices.find { index ->
+                        val line = lyrics.lines.getOrNull(index)
+                        line !is KaraokeLine || !line.isAccompaniment
+                    }
+                    currentMainLine ?: allActiveIndices.first()
                 }
             } else {
                 val nextIndex = lyrics.lines.indexOfFirst { it.start > time }
@@ -256,9 +298,17 @@ fun KaraokeLyricsView(
         }
     }
 
-    val allFocusedLineIndex by remember(lyrics) {
+    val allFocusedLineIndex by remember(lyrics, accompanimentToMainMap) {
         derivedStateOf {
-            lyrics.getCurrentAllHighlightLineIndicesByTime(currentTimeMs())
+            val base = lyrics.getCurrentAllHighlightLineIndicesByTime(currentTimeMs())
+            val result = base.toMutableSet()
+            base.forEach { index ->
+                val line = lyrics.lines.getOrNull(index)
+                if (line is KaraokeLine && line.isAccompaniment) {
+                    accompanimentToMainMap[index]?.let { result.add(it) }
+                }
+            }
+            result.toList().sorted()
         }
     }
 
