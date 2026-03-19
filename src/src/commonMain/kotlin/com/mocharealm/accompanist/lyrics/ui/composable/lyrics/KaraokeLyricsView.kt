@@ -192,28 +192,47 @@ fun KaraokeLyricsView(
 
     val timeProvider = remember { currentPosition }
 
-    val effectiveEndTimes = remember(lyrics.lines) {
-        val endTimes = IntArray(lyrics.lines.size) { lyrics.lines[it].end }
-        // 找出所有主行的索引
-        val mainLineIndices = lyrics.lines.indices.filter {
-            val line = lyrics.lines[it]
+    val accompanimentToMainMap = remember(lyrics.lines) {
+        val map = mutableMapOf<Int, Int>()
+        val mainLinesIndices = lyrics.lines.indices.filter { index ->
+            val line = lyrics.lines[index]
             line !is KaraokeLine || line !is KaraokeLine.AccompanimentKaraokeLine
         }
-
-        mainLineIndices.forEachIndexed { i, mainIdx ->
-            val nextMainIdx = mainLineIndices.getOrNull(i + 1) ?: lyrics.lines.size
-            var maxEnd = lyrics.lines[mainIdx].end
-            // 检查该主行之后到下一个主行之前的伴唱行
-            for (j in mainIdx + 1 until nextMainIdx) {
-                maxEnd = maxOf(maxEnd, lyrics.lines[j].end)
-            }
-            endTimes[mainIdx] = maxEnd
-            // 伴唱行也共享这个结束时间，确保它们作为一个整体消失
-            for (j in mainIdx + 1 until nextMainIdx) {
-                endTimes[j] = maxEnd
+        if (mainLinesIndices.isNotEmpty()) {
+            lyrics.lines.forEachIndexed { index, line ->
+                if (line is KaraokeLine && line is KaraokeLine.AccompanimentKaraokeLine) {
+                    // Find the main line that is closest in time (either the one just before or just after)
+                    val beforeIdx = mainLinesIndices.findLast { it <= index }
+                    val afterIdx = mainLinesIndices.find { it >= index }
+                    
+                    val anchorIndex = when {
+                        beforeIdx != null && afterIdx != null -> {
+                            val distBefore = (line.start - lyrics.lines[beforeIdx].start).absoluteValue
+                            val distAfter = (lyrics.lines[afterIdx].start - line.start).absoluteValue
+                            if (distBefore <= distAfter) beforeIdx else afterIdx
+                        }
+                        beforeIdx != null -> beforeIdx
+                        afterIdx != null -> afterIdx
+                        else -> mainLinesIndices.first()
+                    }
+                    map[index] = anchorIndex
+                }
             }
         }
-        endTimes
+        map
+    }
+    val effectiveEndTimes = remember(lyrics.lines) {
+        IntArray(lyrics.lines.size) { index ->
+            val line = lyrics.lines[index]
+            var maxEnd = line.end
+
+            if (line is KaraokeLine.MainKaraokeLine) {
+                line.accompanimentLines?.forEach { acc ->
+                    if (acc.end > maxEnd) maxEnd = acc.end
+                }
+            }
+            maxEnd
+        }
     }
 
     fun getCurrentAllHighlightLineIndicesByTimeLocally(time: Int): List<Int> {
@@ -251,72 +270,18 @@ fun KaraokeLyricsView(
         clusters
     }
 
-    val accompanimentToMainMap = remember(lyrics.lines) {
-        val map = mutableMapOf<Int, Int>()
-        val mainLinesIndices = lyrics.lines.indices.filter { index ->
-            val line = lyrics.lines[index]
-            line !is KaraokeLine || line !is KaraokeLine.AccompanimentKaraokeLine
-        }
-        if (mainLinesIndices.isNotEmpty()) {
-            lyrics.lines.forEachIndexed { index, line ->
-                if (line is KaraokeLine && line is KaraokeLine.AccompanimentKaraokeLine) {
-                    // Find the main line that is closest in time (either the one just before or just after)
-                    val beforeIdx = mainLinesIndices.findLast { it <= index }
-                    val afterIdx = mainLinesIndices.find { it >= index }
-                    
-                    val anchorIndex = when {
-                        beforeIdx != null && afterIdx != null -> {
-                            val distBefore = (line.start - lyrics.lines[beforeIdx].start).absoluteValue
-                            val distAfter = (lyrics.lines[afterIdx].start - line.start).absoluteValue
-                            if (distBefore <= distAfter) beforeIdx else afterIdx
-                        }
-                        beforeIdx != null -> beforeIdx
-                        afterIdx != null -> afterIdx
-                        else -> mainLinesIndices.first()
-                    }
-                    map[index] = anchorIndex
-                }
-            }
-        }
-        map
-    }
-
-    val firstFocusedLineIndex by remember(lyrics.lines, lineClusters) {
+    val firstFocusedLineIndex by remember(lyrics.lines, effectiveEndTimes) {
         derivedStateOf {
             val time = currentTimeMs()
-            val allActiveIndices = getCurrentAllHighlightLineIndicesByTimeLocally(time)
+            val activeIndex = lyrics.lines.indices.find { idx ->
+                time >= lyrics.lines[idx].start && time < effectiveEndTimes[idx]
+            }
 
-            if (allActiveIndices.isNotEmpty()) {
-                val firstActiveIdx = allActiveIndices.first()
-                val cluster = lineClusters.find { it.contains(firstActiveIdx) }
-                if (cluster != null) {
-                    val firstMainInCluster = cluster.find { idx ->
-                        val line = lyrics.lines.getOrNull(idx)
-                        line !is KaraokeLine || line !is KaraokeLine.AccompanimentKaraokeLine
-                    }
-                    firstMainInCluster ?: cluster.first()
-                } else {
-                    val currentMainLine = allActiveIndices.find { index ->
-                        val line = lyrics.lines.getOrNull(index)
-                        line !is KaraokeLine || line !is KaraokeLine.AccompanimentKaraokeLine
-                    }
-                    currentMainLine ?: allActiveIndices.first()
-                }
+            if (activeIndex != null) {
+                activeIndex
             } else {
-                val nextIndex = lyrics.lines.indexOfFirst { it.start > time }
-                if (nextIndex != -1) {
-                    var targetIndex = nextIndex
-                    for (i in nextIndex downTo 0) {
-                        val line = lyrics.lines.getOrNull(i)
-                        if (line !is KaraokeLine || line !is KaraokeLine.AccompanimentKaraokeLine) {
-                            targetIndex = i
-                            break
-                        }
-                    }
-                    targetIndex
-                } else {
-                    lyrics.lines.lastIndex
-                }
+                val nextIdx = lyrics.lines.indexOfFirst { it.start > time }
+                if (nextIdx != -1) nextIdx else lyrics.lines.lastIndex
             }
         }
     }
@@ -346,7 +311,7 @@ fun KaraokeLyricsView(
 
     val accompanimentVisibilityRanges = remember(lyrics.lines) {
         val map = mutableMapOf<Int, IntRange>()
-        val mainLines = lyrics.lines.filter { it !is KaraokeLine || it is KaraokeLine.AccompanimentKaraokeLine }
+        val mainLines = lyrics.lines.filter { it !is KaraokeLine || it !is KaraokeLine.AccompanimentKaraokeLine }
         if (mainLines.isNotEmpty()) {
             lyrics.lines.forEachIndexed { index, line ->
                 if (line is KaraokeLine && line is KaraokeLine.AccompanimentKaraokeLine) {
