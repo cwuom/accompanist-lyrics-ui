@@ -399,6 +399,7 @@ private fun DrawScope.drawRowText(
 fun KaraokeLineText(
     line: KaraokeLine,
     currentTimeProvider: () -> Int,
+    renderTimeProvider: () -> Int = currentTimeProvider,
     modifier: Modifier = Modifier,
     normalLineTextStyle: TextStyle = LocalTextStyle.current,
     accompanimentLineTextStyle: TextStyle = LocalTextStyle.current,
@@ -480,6 +481,7 @@ fun KaraokeLineText(
                     KaraokeLineText(
                         line = bgLine,
                         currentTimeProvider = currentTimeProvider,
+                        renderTimeProvider = renderTimeProvider,
                         normalLineTextStyle = normalLineTextStyle,
                         accompanimentLineTextStyle = accompanimentLineTextStyle,
                         phoneticTextStyle = phoneticTextStyle,
@@ -510,7 +512,11 @@ fun KaraokeLineText(
             val density = LocalDensity.current
             val availableWidthPx = with(density) { maxWidth.toPx() }
 
-            val textStyle = remember(line is KaraokeLine.AccompanimentKaraokeLine) {
+            val textStyle = remember(
+                line is KaraokeLine.AccompanimentKaraokeLine,
+                accompanimentLineTextStyle,
+                normalLineTextStyle
+            ) {
                 val baseStyle =
                     if (line is KaraokeLine.AccompanimentKaraokeLine) accompanimentLineTextStyle
                     else normalLineTextStyle
@@ -529,7 +535,15 @@ fun KaraokeLineText(
                 }
             }
 
-            val initialLayouts by remember(precalculatedLayouts) {
+            val initialLayouts by remember(
+                precalculatedLayouts,
+                processedSyllables,
+                textMeasurer,
+                textStyle,
+                phoneticTextStyle,
+                line is KaraokeLine.AccompanimentKaraokeLine,
+                spaceWidth
+            ) {
                 derivedStateOf {
                     precalculatedLayouts ?: measureSyllablesAndDetermineAnimation(
                         syllables = processedSyllables,
@@ -542,7 +556,7 @@ fun KaraokeLineText(
                 }
             }
 
-            val wrappedLines by remember {
+            val wrappedLines by remember(initialLayouts, availableWidthPx, textMeasurer, textStyle) {
                 derivedStateOf {
                     calculateBalancedLines(
                         syllableLayouts = initialLayouts,
@@ -595,7 +609,7 @@ fun KaraokeLineText(
             }
 
             Canvas(modifier = Modifier.size(maxWidth, (totalHeight.roundToInt() + 8).toDp())) {
-                val time = currentTimeProvider()
+                val time = renderTimeProvider()
                 drawLyricsLine(
                     rowRenderData = rowRenderData,
                     currentTimeMs = time,

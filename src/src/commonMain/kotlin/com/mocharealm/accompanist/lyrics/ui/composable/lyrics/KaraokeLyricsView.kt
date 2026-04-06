@@ -56,6 +56,7 @@ import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
 import com.mocharealm.accompanist.lyrics.ui.utils.isRtl
 import com.mocharealm.accompanist.lyrics.ui.utils.modifier.springPlacement
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlin.math.absoluteValue
@@ -98,6 +99,7 @@ fun KaraokeLyricsView(
     listState: LazyListState,
     lyrics: SyncedLyrics,
     currentPosition: () -> Int,
+    renderCurrentPosition: (() -> Int)? = null,
     onLineClicked: (ISyncedLine) -> Unit,
     onLinePressed: (ISyncedLine) -> Unit,
     modifier: Modifier = Modifier,
@@ -128,8 +130,13 @@ fun KaraokeLyricsView(
     useBlurEffect: Boolean = true,
     showTranslation: Boolean = true,
     showPhonetic: Boolean = true,
+    focusedLineScale: Float = 1f,
+    unfocusedLineScale: Float = 0.98f,
+    activeLineAlpha: Float = 1f,
+    inactiveLineAlpha: Float = 0.4f,
     offset: Dp = 32.dp,
     keepAliveZone: Dp = 100.dp,
+    bottomContentInset: Dp = 0.dp,
     blurDelta: Float = 3f,
     showDebugRectangles: Boolean = false
 ) {
@@ -195,9 +202,12 @@ fun KaraokeLyricsView(
         }
     }
 
-    val currentTimeMs: () -> Int = currentPosition
-
-    val timeProvider = remember { currentPosition }
+    val currentPositionState = rememberUpdatedState(currentPosition)
+    val timeProvider: () -> Int = { currentPositionState.value() }
+    val renderCurrentPositionState = rememberUpdatedState(renderCurrentPosition)
+    val renderTimeProvider: () -> Int = {
+        renderCurrentPositionState.value?.invoke() ?: currentPositionState.value()
+    }
 
     val accompanimentToMainMap = remember(lyrics.lines) {
         val map = mutableMapOf<Int, Int>()
@@ -254,43 +264,51 @@ fun KaraokeLyricsView(
         }
     }
 
-    val lyricsFocusState by remember(lyrics, effectiveEndTimes, accompanimentToMainMap, haveDotsIntro) {
-        derivedStateOf {
-            val time = currentTimeMs()
-            val activeIndex = lyrics.lines.indices.find { idx ->
-                time >= lyrics.lines[idx].start && time < effectiveEndTimes[idx]
-            }
-
-            val first = if (activeIndex != null) {
-                activeIndex
-            } else {
-                val nextIdx = lyrics.lines.indexOfFirst { it.start > time }
-                if (nextIdx != -1) nextIdx else lyrics.lines.lastIndex
-            }
-
-            val base = lyrics.lines.indices.filter { index ->
-                time >= lyrics.lines[index].start && time < effectiveEndTimes[index]
-            }
-            val result = base.toMutableSet()
-            base.forEach { index ->
-                val line = lyrics.lines.getOrNull(index)
-                if (line is KaraokeLine && line is KaraokeLine.AccompanimentKaraokeLine) {
-                    accompanimentToMainMap[index]?.let { result.add(it) }
-                }
-            }
-
-            val activeInterludeIndex = lyrics.lines.indices.find { index ->
-                val line = lyrics.lines[index]
-                val previousLine = lyrics.lines.getOrNull(index - 1)
-                previousLine != null && (line.start - previousLine.end > 5000) && time in previousLine.end..line.start
-            }
-            val activeIntro = haveDotsIntro && time in 0 until (firstLine?.start ?: 0)
-
-            FocusState(first, result.toList().sorted(), activeInterludeIndex, activeIntro)
+    val currentTimeMs = currentPositionState.value()
+    val lyricsFocusState = remember(
+        lyrics,
+        effectiveEndTimes,
+        accompanimentToMainMap,
+        haveDotsIntro,
+        currentTimeMs
+    ) {
+        val activeIndex = lyrics.lines.indices.find { idx ->
+            currentTimeMs >= lyrics.lines[idx].start && currentTimeMs < effectiveEndTimes[idx]
         }
+
+        val first = if (activeIndex != null) {
+            activeIndex
+        } else {
+            val nextIdx = lyrics.lines.indexOfFirst { it.start > currentTimeMs }
+            if (nextIdx != -1) nextIdx else lyrics.lines.lastIndex
+        }
+
+        val base = lyrics.lines.indices.filter { index ->
+            currentTimeMs >= lyrics.lines[index].start && currentTimeMs < effectiveEndTimes[index]
+        }
+        val result = base.toMutableSet()
+        base.forEach { index ->
+            val line = lyrics.lines.getOrNull(index)
+            if (line is KaraokeLine && line is KaraokeLine.AccompanimentKaraokeLine) {
+                accompanimentToMainMap[index]?.let { result.add(it) }
+            }
+        }
+
+        val activeInterludeIndex = lyrics.lines.indices.find { index ->
+            val line = lyrics.lines[index]
+            val previousLine = lyrics.lines.getOrNull(index - 1)
+            previousLine != null &&
+                (line.start - previousLine.end > 5000) &&
+                currentTimeMs in previousLine.end..line.start
+        }
+        val activeIntro = haveDotsIntro && currentTimeMs in 0 until (firstLine?.start ?: 0)
+
+        FocusState(first, result.toList().sorted(), activeInterludeIndex, activeIntro)
     }
 
     val scrollInCode = remember { mutableStateOf(false) }
+    val lastAutoScrollIndex = remember(lyrics) { mutableStateOf<Int?>(null) }
+    val suppressPlacementAnimation = remember(lyrics) { mutableStateOf(true) }
 
     val isManualScrolling by remember {
         derivedStateOf {
@@ -298,40 +316,50 @@ fun KaraokeLyricsView(
         }
     }
 
-    LaunchedEffect(
-        layoutCache,
-        stableOffsetPx,
-    ) {
-        androidx.compose.runtime.snapshotFlow { lyricsFocusState.firstIndex }
-            .collect { firstIndex ->
-                if (!scrollInCode.value) {
-                    val items = listState.layoutInfo.visibleItemsInfo
-                    val targetItem = items.firstOrNull { it.index == firstIndex }
-                    val scrollOffset =
-                        (targetItem?.offset?.minus(listState.layoutInfo.viewportStartOffset + stableOffsetPx + keepAliveZonePx))
-                    try {
-                        scrollInCode.value = true
-                        if (scrollOffset != null) {
-                            listState.scrollBy(scrollOffset.toFloat())
-                        } else {
-                            listState.animateScrollToItem(
-                                firstIndex,
-                                (-stableOffsetPx - keepAliveZonePx).toInt()
-                            )
-                        }
-                    } catch (_: Exception) {
-                    } finally {
-                        scrollInCode.value = false
+    LaunchedEffect(lyricsFocusState.firstIndex, stableOffsetPx, keepAliveZonePx, layoutCache.size) {
+        val firstIndex = lyricsFocusState.firstIndex
+        if (!scrollInCode.value && firstIndex in lyrics.lines.indices) {
+            val items = listState.layoutInfo.visibleItemsInfo
+            val targetItem = items.firstOrNull { it.index == firstIndex }
+            val previousAutoScrollIndex = lastAutoScrollIndex.value
+            val shouldSnapToTarget = previousAutoScrollIndex == null ||
+                (firstIndex - previousAutoScrollIndex).absoluteValue > 1
+            val targetScrollOffset = (-stableOffsetPx - keepAliveZonePx).toInt()
+            val scrollOffset =
+                targetItem?.offset?.minus(
+                    listState.layoutInfo.viewportStartOffset + stableOffsetPx + keepAliveZonePx
+                )
+            try {
+                scrollInCode.value = true
+                suppressPlacementAnimation.value = shouldSnapToTarget
+                if (scrollOffset != null) {
+                    if (scrollOffset != 0f) {
+                        listState.scrollBy(scrollOffset.toFloat())
+                    }
+                } else {
+                    if (shouldSnapToTarget) {
+                        listState.scrollToItem(firstIndex, targetScrollOffset)
+                    } else {
+                        listState.animateScrollToItem(firstIndex, targetScrollOffset)
                     }
                 }
+                lastAutoScrollIndex.value = firstIndex
+                if (shouldSnapToTarget) {
+                    delay(80)
+                }
+            } catch (_: Exception) {
+            } finally {
+                scrollInCode.value = false
+                suppressPlacementAnimation.value = false
             }
+        }
     }
     LookaheadScope {
         Crossfade(lyrics) { lyrics ->
             Box(modifier = modifier.clipToBounds()) {
                 LazyColumn(
                     state = listState,
-                    modifier = modifier
+                    modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
                             compositingStrategy = CompositingStrategy.Offscreen
@@ -365,7 +393,10 @@ fun KaraokeLyricsView(
                                 placeable.place(0, -(keepAliveZone.roundToPx()))
                             }
                         },
-                    contentPadding = PaddingValues(vertical = stableOffset + keepAliveZone)
+                    contentPadding = PaddingValues(
+                        top = stableOffset + keepAliveZone,
+                        bottom = stableOffset + keepAliveZone + bottomContentInset
+                    )
                 ) {
                     itemsIndexed(
                         items = lyrics.lines,
@@ -412,7 +443,7 @@ fun KaraokeLyricsView(
                                 .springPlacement(
                                     this@LookaheadScope,
                                     "${line.start}-${line.end}-$index",
-                                    isManualScrolling,
+                                    isManualScrolling || suppressPlacementAnimation.value,
                                     stiffness = dynamicStiffness
                                 ),
                             horizontalAlignment = if (isVisualRightAligned) Alignment.End else Alignment.Start
@@ -458,11 +489,16 @@ fun KaraokeLyricsView(
                                             onLineClicked = { onLineClicked(line) },
                                             onLinePressed = { onLinePressed(line) },
                                             blurRadius = { blurRadiusState.value },
+                                            focusedScale = focusedLineScale,
+                                            unfocusedScale = unfocusedLineScale,
+                                            activeAlpha = activeLineAlpha,
+                                            inactiveAlpha = inactiveLineAlpha,
                                             blendMode = stableBlendMode,
                                         ) {
                                             KaraokeLineText(
                                                 line = line,
                                                 currentTimeProvider = timeProvider,
+                                                renderTimeProvider = renderTimeProvider,
                                                 normalLineTextStyle = stableNormalTextStyle,
                                                 accompanimentLineTextStyle = stableAccompanimentTextStyle,
                                                 phoneticTextStyle = stablePhoneticTextStyle,
@@ -485,6 +521,10 @@ fun KaraokeLyricsView(
                                         onLineClicked = { onLineClicked(line) },
                                         onLinePressed = { onLinePressed(line) },
                                         blurRadius = { blurRadiusState.value },
+                                        focusedScale = focusedLineScale,
+                                        unfocusedScale = unfocusedLineScale,
+                                        activeAlpha = activeLineAlpha,
+                                        inactiveAlpha = inactiveLineAlpha,
                                         blendMode = stableBlendMode,
                                     ) {
                                         SyncedLineText(

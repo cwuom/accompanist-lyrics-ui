@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -18,7 +19,6 @@ import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
-import com.mocharealm.gaze.capsule.ContinuousRoundedRectangle
 
 @Composable
 fun LyricsLineItem(
@@ -28,6 +28,8 @@ fun LyricsLineItem(
     onLinePressed: () -> Unit,
     blurRadius: () -> Float,
     modifier: Modifier = Modifier,
+    focusedScale: Float = 1f,
+    unfocusedScale: Float = 0.98f,
     activeAlpha: Float = 1f,
     inactiveAlpha: Float = 0.4f,
     blendMode: BlendMode = BlendMode.SrcOver,
@@ -35,7 +37,7 @@ fun LyricsLineItem(
     content: @Composable () -> Unit
 ) {
     val scaleState by animateFloatAsState(
-        targetValue = if (isFocused) 1f else 0.98f,
+        targetValue = if (isFocused) focusedScale else unfocusedScale,
         animationSpec = if (isFocused) {
             tween(durationMillis = 600, easing = LinearOutSlowInEasing)
         } else {
@@ -70,7 +72,7 @@ fun LyricsLineItem(
                 }
             }
             .then(
-                if (isInteractive) Modifier.clip(ContinuousRoundedRectangle(8.dp))
+                if (isInteractive) Modifier.clip(RoundedCornerShape(8.dp))
                     .combinedClickable(
                         onClick = onLineClicked,
                         onLongClick = onLinePressed
