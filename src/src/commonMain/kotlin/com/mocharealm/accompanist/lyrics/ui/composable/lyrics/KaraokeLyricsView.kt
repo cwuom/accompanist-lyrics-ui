@@ -1,8 +1,8 @@
 package com.mocharealm.accompanist.lyrics.ui.composable.lyrics
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.scrollBy
@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -59,6 +60,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.absoluteValue
 
 internal data class FocusState(
@@ -67,6 +69,116 @@ internal data class FocusState(
     val activeInterludeIndex: Int?,
     val activeIntro: Boolean
 )
+
+private const val InitialPlacementSuppressionMs = 80L
+private const val FocusFollowPlacementSuppressionMs = 0L
+private const val FocusJumpPlacementSuppressionMs = 220L
+private const val FocusedLineAlignmentCorrectionPasses = 18
+private const val FocusedLineAlignmentTolerancePx = 1f
+
+internal enum class FocusedLineScrollMode {
+    Snap,
+    Animate
+}
+
+internal fun resolveFocusedLineScrollMode(
+    previousAutoScrollIndex: Int?,
+    targetIndex: Int
+): FocusedLineScrollMode {
+    return if (previousAutoScrollIndex == null || targetIndex < 0) {
+        FocusedLineScrollMode.Snap
+    } else {
+        // 首次布局可以直接对齐，后续包括大跨度 seek 都应保留平滑滚动
+        FocusedLineScrollMode.Animate
+    }
+}
+
+internal fun resolveFocusedLinePlacementSuppressionMs(
+    previousAutoScrollIndex: Int?,
+    targetIndex: Int
+): Long {
+    if (targetIndex < 0) {
+        return 0L
+    }
+    if (previousAutoScrollIndex == null) {
+        return InitialPlacementSuppressionMs
+    }
+    val focusShiftDistance = (targetIndex - previousAutoScrollIndex).absoluteValue
+    return when {
+        focusShiftDistance == 0 -> 0L
+        focusShiftDistance == 1 -> {
+            // 正常逐句播放要保留 accompanist 原本的 placement spring，
+            // 否则会把 Apple Music 风格的弹性跟随压成线性平移
+            FocusFollowPlacementSuppressionMs
+        }
+        else -> {
+            // seek 后内部显隐/高度动画还在跑，提前恢复 placement spring 会把相邻歌词压到一起
+            FocusJumpPlacementSuppressionMs
+        }
+    }
+}
+
+internal fun shouldRealignFocusedLineAfterLayout(
+    previousAutoScrollIndex: Int?,
+    targetIndex: Int
+): Boolean {
+    if (targetIndex < 0) {
+        return false
+    }
+    if (previousAutoScrollIndex == null) {
+        return true
+    }
+    return (targetIndex - previousAutoScrollIndex).absoluteValue > 1
+}
+
+internal fun shouldSuppressLinePlacementAnimation(
+    isManualScrolling: Boolean,
+    suppressPlacementAnimation: Boolean
+): Boolean {
+    return isManualScrolling || suppressPlacementAnimation
+}
+
+internal fun shouldAnimateVisibleFocusedLineScroll(
+    previousAutoScrollIndex: Int?,
+    targetIndex: Int
+): Boolean {
+    if (previousAutoScrollIndex == null || targetIndex < 0) {
+        return false
+    }
+    return (targetIndex - previousAutoScrollIndex).absoluteValue > 1
+}
+
+internal fun resolveFocusedLineViewportDelta(
+    itemOffset: Int,
+    viewportStartOffset: Int,
+    stableOffsetPx: Int,
+    keepAliveZonePx: Float
+): Float {
+    return itemOffset - (viewportStartOffset + stableOffsetPx + keepAliveZonePx)
+}
+
+private suspend fun LazyListState.realignFocusedLineAfterLayout(
+    targetIndex: Int,
+    stableOffsetPx: Int,
+    keepAliveZonePx: Float,
+    correctionPasses: Int = FocusedLineAlignmentCorrectionPasses,
+    tolerancePx: Float = FocusedLineAlignmentTolerancePx
+) {
+    repeat(correctionPasses) {
+        withFrameNanos { }
+        val targetItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIndex } ?: return
+        val delta = resolveFocusedLineViewportDelta(
+            itemOffset = targetItem.offset,
+            viewportStartOffset = layoutInfo.viewportStartOffset,
+            stableOffsetPx = stableOffsetPx,
+            keepAliveZonePx = keepAliveZonePx
+        )
+        if (abs(delta) <= tolerancePx) {
+            return
+        }
+        scrollBy(delta)
+    }
+}
 
 /**
  * A comprehensive lyrics view that supports Karaoke and Synced lyrics with advanced rendering.
@@ -130,6 +242,7 @@ fun KaraokeLyricsView(
     useBlurEffect: Boolean = true,
     showTranslation: Boolean = true,
     showPhonetic: Boolean = true,
+    animateViewportScroll: Boolean = false,
     focusedLineScale: Float = 1f,
     unfocusedLineScale: Float = 0.98f,
     activeLineAlpha: Float = 1f,
@@ -138,6 +251,8 @@ fun KaraokeLyricsView(
     keepAliveZone: Dp = 100.dp,
     bottomContentInset: Dp = 0.dp,
     blurDelta: Float = 3f,
+    topFadeLength: Dp = 20.dp,
+    bottomFadeLength: Dp = 100.dp,
     showDebugRectangles: Boolean = false
 ) {
     val density = LocalDensity.current
@@ -322,30 +437,68 @@ fun KaraokeLyricsView(
             val items = listState.layoutInfo.visibleItemsInfo
             val targetItem = items.firstOrNull { it.index == firstIndex }
             val previousAutoScrollIndex = lastAutoScrollIndex.value
-            val shouldSnapToTarget = previousAutoScrollIndex == null ||
-                (firstIndex - previousAutoScrollIndex).absoluteValue > 1
+            val scrollMode = resolveFocusedLineScrollMode(
+                previousAutoScrollIndex = previousAutoScrollIndex,
+                targetIndex = firstIndex
+            )
+            val placementSuppressionMs = resolveFocusedLinePlacementSuppressionMs(
+                previousAutoScrollIndex = previousAutoScrollIndex,
+                targetIndex = firstIndex
+            )
+            val shouldAnimateVisibleScroll = animateViewportScroll ||
+                shouldAnimateVisibleFocusedLineScroll(
+                previousAutoScrollIndex = previousAutoScrollIndex,
+                targetIndex = firstIndex
+            )
             val targetScrollOffset = (-stableOffsetPx - keepAliveZonePx).toInt()
             val scrollOffset =
-                targetItem?.offset?.minus(
-                    listState.layoutInfo.viewportStartOffset + stableOffsetPx + keepAliveZonePx
-                )
+                targetItem?.let {
+                    resolveFocusedLineViewportDelta(
+                        itemOffset = it.offset,
+                        viewportStartOffset = listState.layoutInfo.viewportStartOffset,
+                        stableOffsetPx = stableOffsetPx,
+                        keepAliveZonePx = keepAliveZonePx
+                    )
+                }
             try {
                 scrollInCode.value = true
-                suppressPlacementAnimation.value = shouldSnapToTarget
+                suppressPlacementAnimation.value =
+                    animateViewportScroll || placementSuppressionMs > 0L
                 if (scrollOffset != null) {
                     if (scrollOffset != 0f) {
-                        listState.scrollBy(scrollOffset.toFloat())
+                        if (shouldAnimateVisibleScroll) {
+                            // seek/大跳转时，即便目标行还在可见区，也要保留用户手动滚动般的平滑过渡
+                            listState.animateScrollBy(scrollOffset)
+                        } else {
+                            // 逐句播放保留原本的直接滚动，让 placement spring 负责 Apple Music 风格弹性
+                            listState.scrollBy(scrollOffset)
+                        }
                     }
                 } else {
-                    if (shouldSnapToTarget) {
-                        listState.scrollToItem(firstIndex, targetScrollOffset)
-                    } else {
-                        listState.animateScrollToItem(firstIndex, targetScrollOffset)
+                    when {
+                        animateViewportScroll -> {
+                            listState.animateScrollToItem(firstIndex, targetScrollOffset)
+                        }
+                        scrollMode == FocusedLineScrollMode.Snap -> {
+                            listState.scrollToItem(firstIndex, targetScrollOffset)
+                        }
+                        else -> {
+                            listState.animateScrollToItem(firstIndex, targetScrollOffset)
+                        }
                     }
                 }
                 lastAutoScrollIndex.value = firstIndex
-                if (shouldSnapToTarget) {
-                    delay(80)
+                if (!animateViewportScroll &&
+                    shouldRealignFocusedLineAfterLayout(previousAutoScrollIndex, firstIndex)
+                ) {
+                    listState.realignFocusedLineAfterLayout(
+                        targetIndex = firstIndex,
+                        stableOffsetPx = stableOffsetPx,
+                        keepAliveZonePx = keepAliveZonePx
+                    )
+                }
+                if (!animateViewportScroll && placementSuppressionMs > 0L) {
+                    delay(placementSuppressionMs)
                 }
             } catch (_: Exception) {
             } finally {
@@ -355,9 +508,8 @@ fun KaraokeLyricsView(
         }
     }
     LookaheadScope {
-        Crossfade(lyrics) { lyrics ->
-            Box(modifier = modifier.clipToBounds()) {
-                LazyColumn(
+        Box(modifier = modifier.clipToBounds()) {
+            LazyColumn(
                     state = listState,
                     modifier = Modifier
                         .fillMaxSize()
@@ -367,13 +519,13 @@ fun KaraokeLyricsView(
                         .drawWithCache {
                             onDrawWithContent {
                                 drawContent()
-                                val topFade = 20.dp.toPx() / size.height
-                                val bottomFade = 100.dp.toPx() / size.height
+                                val topFade = (topFadeLength.toPx() / size.height).coerceIn(0f, 0.48f)
+                                val bottomFade = (bottomFadeLength.toPx() / size.height).coerceIn(0f, 0.48f)
                                 drawRect(
                                     brush = Brush.verticalGradient(
                                         0f to Color.Transparent,
                                         topFade to Color.Black,
-                                        1f - bottomFade to Color.Black,
+                                        (1f - bottomFade).coerceIn(0f, 1f) to Color.Black,
                                         1f to Color.Transparent
                                     ),
                                     blendMode = BlendMode.DstIn
@@ -443,7 +595,10 @@ fun KaraokeLyricsView(
                                 .springPlacement(
                                     this@LookaheadScope,
                                     "${line.start}-${line.end}-$index",
-                                    isManualScrolling || suppressPlacementAnimation.value,
+                                    shouldSuppressLinePlacementAnimation(
+                                        isManualScrolling = isManualScrolling,
+                                        suppressPlacementAnimation = suppressPlacementAnimation.value
+                                    ),
                                     stiffness = dynamicStiffness
                                 ),
                             horizontalAlignment = if (isVisualRightAligned) Alignment.End else Alignment.Start
@@ -546,6 +701,5 @@ fun KaraokeLyricsView(
                     }
                 }
             }
-        }
     }
 }

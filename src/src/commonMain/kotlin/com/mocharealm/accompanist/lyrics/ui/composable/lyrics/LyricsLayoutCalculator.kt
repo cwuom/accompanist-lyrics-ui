@@ -343,7 +343,7 @@ fun calculateStaticLineLayout(
         val rowHeight = lineHeight + if (hasPhoneticInBlock) (phoneticHeight * 0.7f) else 0f
         val rowTopY = lineIndex * rowHeight + if (hasPhoneticInBlock) (phoneticHeight * 0.7f) else 0f
 
-        // 核心逻辑：如果是右对齐，起始点 = 画布宽 - 行宽。否则为 0。
+        // 如果是右对齐，起始点 = 画布宽 - 行宽。否则为 0
         val startX = if (isLineRightAligned) {
             canvasWidth - wrappedLine.totalWidth
         } else {

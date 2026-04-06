@@ -51,10 +51,13 @@ fun ModernKaraokeLyricsView(
     showTranslation: Boolean = true,
     showPhonetic: Boolean = true,
     useBlurEffect: Boolean = true,
+    animateViewportScroll: Boolean = false,
     offset: Dp = 72.dp,
     keepAliveZone: Dp = 128.dp,
     bottomContentInset: Dp = 0.dp,
     blurDelta: Float = 2.6f,
+    topFadeLength: Dp = 20.dp,
+    bottomFadeLength: Dp = 100.dp,
     showDebugRectangles: Boolean = false
 ) {
     KaraokeLyricsView(
@@ -73,6 +76,7 @@ fun ModernKaraokeLyricsView(
         textColor = textColor,
         showTranslation = showTranslation,
         showPhonetic = showPhonetic,
+        animateViewportScroll = animateViewportScroll,
         focusedLineScale = 1.015f,
         unfocusedLineScale = 0.965f,
         activeLineAlpha = 1f,
@@ -82,6 +86,8 @@ fun ModernKaraokeLyricsView(
         keepAliveZone = keepAliveZone,
         bottomContentInset = bottomContentInset,
         blurDelta = blurDelta,
+        topFadeLength = topFadeLength,
+        bottomFadeLength = bottomFadeLength,
         showDebugRectangles = showDebugRectangles
     )
 }

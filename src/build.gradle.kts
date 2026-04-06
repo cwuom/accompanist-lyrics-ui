@@ -17,4 +17,6 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
 
     implementation(project(":accompanist-lyrics-core"))
+
+    testImplementation(libs.junit)
 }

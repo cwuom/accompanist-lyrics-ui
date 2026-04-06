@@ -499,8 +499,8 @@ fun KaraokeLineText(
 
     Column(
         modifier = modifier.fillMaxWidth().padding(
-            vertical = 8.dp, horizontal = if (line is KaraokeLine.AccompanimentKaraokeLine) 0.dp
-            else 16.dp
+            vertical = 8.dp,
+            horizontal = if (line is KaraokeLine.AccompanimentKaraokeLine) 0.dp else 16.dp
         ),
         verticalArrangement = Arrangement.spacedBy(2.dp),
         horizontalAlignment = columnHorizontalAlignment
