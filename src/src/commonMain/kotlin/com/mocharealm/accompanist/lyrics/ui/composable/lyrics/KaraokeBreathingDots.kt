@@ -1,7 +1,6 @@
 package com.mocharealm.accompanist.lyrics.ui.composable.lyrics
 
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
@@ -25,21 +24,61 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeAlignment
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.sin
+import kotlin.math.roundToInt
 
 private val layerPaint = Paint()
+private const val BreathingDotsMinScale = 0.8f
+private const val BreathingDotsBreatheScaleMidpoint = 0.9f
+private const val BreathingDotsBreatheScaleAmplitude = 0.1f
 
 data class KaraokeBreathingDotsDefaults(
     val number: Int = 3,
     val size: Dp = 16.dp,
     val margin: Dp = 12.dp,
     val enterDurationMs: Int = 3000,
+    val breathingCycleDurationMs: Int = 3000,
     val preExitStillDuration: Int = 200,
     val preExitDipAndRiseDuration: Int = 3000,
     val exitDurationMs: Int = 200,
     val breathingDotsColor: Color = Color.White
 )
+
+internal fun resolveBreathingDotsBreatheScale(
+    timeInPhaseMs: Float,
+    phaseDurationMs: Float,
+    preferredCycleDurationMs: Int
+): Float {
+    if (phaseDurationMs <= 0f) {
+        return 1f
+    }
+
+    val safePhaseDurationMs = phaseDurationMs.coerceAtLeast(1f)
+    val safeTimeInPhaseMs = timeInPhaseMs.coerceIn(0f, safePhaseDurationMs)
+    val desiredHalfCycles = safePhaseDurationMs /
+        (preferredCycleDurationMs.coerceAtLeast(1) / 2f)
+    val alignedHalfCycles = resolveNearestOddHalfCycleCount(desiredHalfCycles)
+    val angle = (safeTimeInPhaseMs / safePhaseDurationMs) * alignedHalfCycles * PI.toFloat()
+
+    return BreathingDotsBreatheScaleMidpoint -
+        BreathingDotsBreatheScaleAmplitude * cos(angle)
+}
+
+private fun resolveNearestOddHalfCycleCount(desiredHalfCycles: Float): Int {
+    val rounded = desiredHalfCycles.roundToInt().coerceAtLeast(1)
+    if (rounded % 2 == 1) {
+        return rounded
+    }
+
+    val lowerOdd = (rounded - 1).coerceAtLeast(1)
+    val upperOdd = rounded + 1
+    return if (abs(desiredHalfCycles - lowerOdd) <= abs(upperOdd - desiredHalfCycles)) {
+        lowerOdd
+    } else {
+        upperOdd
+    }
+}
 /**
  * Displays breathing dots animation during instrumental intros or interludes.
  * The dots breathe/pulse and fade in/out to indicate progress during non-lyrical sections.
@@ -115,7 +154,7 @@ fun KaraokeBreathingDots(
                 currentTime < timeline.enterEnd -> {
                     val progress = ((currentTime - startTimeMs) / (timeline.enterEnd - startTimeMs)).coerceIn(0f, 1f)
                     alpha = FastOutSlowInEasing.transform(progress)
-                    scale = alpha * 0.8f
+                    scale = alpha * BreathingDotsMinScale
                     revealProgress = alpha
                 }
                 // Stage 2: Breathe
@@ -123,8 +162,11 @@ fun KaraokeBreathingDots(
                     alpha = 1f
                     revealProgress = 1f
                     val timeInPhase = currentTime - timeline.enterEnd
-                    val angle = (timeInPhase / 3000f) * 2 * PI
-                    scale = 0.9f - 0.1f * cos(angle.toFloat())
+                    scale = resolveBreathingDotsBreatheScale(
+                        timeInPhaseMs = timeInPhase,
+                        phaseDurationMs = timeline.breathingDuration,
+                        preferredCycleDurationMs = defaults.breathingCycleDurationMs
+                    )
                 }
                 // Stage 3: Pre-exit
                 currentTime < timeline.stillStart -> {

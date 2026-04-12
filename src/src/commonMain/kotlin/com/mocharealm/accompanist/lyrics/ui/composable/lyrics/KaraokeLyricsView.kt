@@ -619,7 +619,7 @@ fun KaraokeLyricsView(
                                     },
                                     startTimeMs = previousLine?.end ?: 0,
                                     endTimeMs = if (showDotsIntro) firstLine!!.start else line.start,
-                                    currentTimeProvider = timeProvider,
+                                    currentTimeProvider = renderTimeProvider,
                                     defaults = breathingDotsDefaults,
                                     modifier = Modifier.padding(vertical = 12.dp)
                                 )
