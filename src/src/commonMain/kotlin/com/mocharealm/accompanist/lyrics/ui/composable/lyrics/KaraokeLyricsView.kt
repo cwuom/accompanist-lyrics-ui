@@ -2,10 +2,12 @@ package com.mocharealm.accompanist.lyrics.ui.composable.lyrics
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.LocalTextStyle
@@ -57,11 +60,13 @@ import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
 import com.mocharealm.accompanist.lyrics.ui.utils.isRtl
 import com.mocharealm.accompanist.lyrics.ui.utils.modifier.springPlacement
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.absoluteValue
+import kotlin.math.roundToInt
 
 internal data class FocusState(
     val firstIndex: Int,
@@ -75,6 +80,19 @@ private const val FocusFollowPlacementSuppressionMs = 0L
 private const val FocusJumpPlacementSuppressionMs = 220L
 private const val FocusedLineAlignmentCorrectionPasses = 18
 private const val FocusedLineAlignmentTolerancePx = 1f
+private const val ManualViewportRecenterPlacementSuppressionMs = 180L
+private const val ManualViewportRecenterMaxTotalDurationMs = 900
+private const val ManualViewportRecenterMainMinDurationMs = 260
+private const val ManualViewportRecenterMainMaxDurationMs = 760
+private const val ManualViewportRecenterMainBaseDurationMs = 220
+private const val ManualViewportRecenterMainDistanceDivisorPx = 3.8f
+private const val ManualViewportRecenterRefineMinDurationMs = 120
+private const val ManualViewportRecenterRefineMaxDurationMs = 180
+private const val ManualViewportRecenterRefineBaseDurationMs = 90
+private const val ManualViewportRecenterRefineDistanceDivisorPx = 10f
+private const val ManualViewportRecenterMaxPasses = 3
+private const val VisibleItemStrideFallbackPx = 96f
+private val ManualViewportRecenterEasing = CubicBezierEasing(0.18f, 0.96f, 0.28f, 1f)
 
 internal enum class FocusedLineScrollMode {
     Snap,
@@ -138,6 +156,70 @@ internal fun shouldSuppressLinePlacementAnimation(
     return isManualScrolling || suppressPlacementAnimation
 }
 
+internal fun shouldSuppressFocusedLinePlacementAnimation(
+    useManualViewportRecenter: Boolean,
+    animateViewportScroll: Boolean,
+    placementSuppressionMs: Long,
+    targetItemVisible: Boolean,
+    scrollMode: FocusedLineScrollMode
+): Boolean {
+    if (useManualViewportRecenter) {
+        return true
+    }
+    if (animateViewportScroll || placementSuppressionMs > 0L) {
+        return true
+    }
+    return !targetItemVisible && scrollMode == FocusedLineScrollMode.Animate
+}
+
+internal fun shouldWaitForManualViewportRecenter(
+    manualViewportRecenterPending: Boolean,
+    manualViewportRecenterTriggerIndex: Int?,
+    animateViewportScroll: Boolean,
+    currentFocusIndex: Int
+): Boolean {
+    if (!manualViewportRecenterPending || animateViewportScroll) {
+        return false
+    }
+    val triggerIndex = manualViewportRecenterTriggerIndex ?: return true
+    return currentFocusIndex == triggerIndex
+}
+
+internal fun shouldStartManualViewportRecenter(
+    manualViewportRecenterPending: Boolean,
+    manualViewportRecenterTriggerIndex: Int?,
+    animateViewportScroll: Boolean,
+    currentFocusIndex: Int
+): Boolean {
+    if (!manualViewportRecenterPending || animateViewportScroll) {
+        return false
+    }
+    val triggerIndex = manualViewportRecenterTriggerIndex ?: return false
+    return currentFocusIndex != triggerIndex
+}
+
+internal fun resolveManualViewportRecenterMainDurationMs(distancePx: Float): Int {
+    val normalizedDistancePx = abs(distancePx)
+    return (
+        ManualViewportRecenterMainBaseDurationMs +
+            normalizedDistancePx / ManualViewportRecenterMainDistanceDivisorPx
+        ).roundToInt().coerceIn(
+            ManualViewportRecenterMainMinDurationMs,
+            ManualViewportRecenterMainMaxDurationMs
+        )
+}
+
+internal fun resolveManualViewportRecenterRefineDurationMs(distancePx: Float): Int {
+    val normalizedDistancePx = abs(distancePx)
+    return (
+        ManualViewportRecenterRefineBaseDurationMs +
+            normalizedDistancePx / ManualViewportRecenterRefineDistanceDivisorPx
+        ).roundToInt().coerceIn(
+            ManualViewportRecenterRefineMinDurationMs,
+            ManualViewportRecenterRefineMaxDurationMs
+        )
+}
+
 internal fun shouldAnimateVisibleFocusedLineScroll(
     previousAutoScrollIndex: Int?,
     targetIndex: Int
@@ -155,6 +237,135 @@ internal fun resolveFocusedLineViewportDelta(
     keepAliveZonePx: Float
 ): Float {
     return itemOffset - (viewportStartOffset + stableOffsetPx + keepAliveZonePx)
+}
+
+private fun resolveAverageVisibleItemStridePx(visibleItems: List<LazyListItemInfo>): Float {
+    val sampledStridePx = visibleItems.zipWithNext { first, second ->
+        (second.offset - first.offset).absoluteValue.toFloat()
+    }.average().toFloat()
+    if (sampledStridePx > 0f) {
+        return sampledStridePx
+    }
+    val averageSizePx = visibleItems.map { it.size }.average().toFloat()
+    return averageSizePx.takeIf { it > 0f } ?: VisibleItemStrideFallbackPx
+}
+
+private fun LazyListState.resolveApproximateFocusedLineViewportDelta(
+    targetIndex: Int,
+    stableOffsetPx: Int,
+    keepAliveZonePx: Float
+): Float {
+    val visibleItems = layoutInfo.visibleItemsInfo
+    val targetItem = visibleItems.firstOrNull { it.index == targetIndex }
+    if (targetItem != null) {
+        return resolveFocusedLineViewportDelta(
+            itemOffset = targetItem.offset,
+            viewportStartOffset = layoutInfo.viewportStartOffset,
+            stableOffsetPx = stableOffsetPx,
+            keepAliveZonePx = keepAliveZonePx
+        )
+    }
+    if (visibleItems.isEmpty()) {
+        return 0f
+    }
+
+    val viewportAnchor = layoutInfo.viewportStartOffset + stableOffsetPx + keepAliveZonePx
+    val averageStridePx = resolveAverageVisibleItemStridePx(visibleItems)
+    val firstVisibleItem = visibleItems.first()
+    val lastVisibleItem = visibleItems.last()
+
+    return when {
+        targetIndex < firstVisibleItem.index -> {
+            val itemsAway = (firstVisibleItem.index - targetIndex).toFloat()
+            val estimatedOffset = firstVisibleItem.offset - (itemsAway * averageStridePx)
+            estimatedOffset - viewportAnchor
+        }
+
+        targetIndex > lastVisibleItem.index -> {
+            val itemsAway = (targetIndex - lastVisibleItem.index).toFloat()
+            val estimatedOffset = lastVisibleItem.offset +
+                lastVisibleItem.size +
+                ((itemsAway - 1f).coerceAtLeast(0f) * averageStridePx)
+            estimatedOffset - viewportAnchor
+        }
+
+        else -> 0f
+    }
+}
+
+private suspend fun LazyListState.animateFocusedLineManualRecenter(
+    targetIndex: Int,
+    targetScrollOffset: Int,
+    stableOffsetPx: Int,
+    keepAliveZonePx: Float,
+    tolerancePx: Float = FocusedLineAlignmentTolerancePx
+) {
+    stopScroll()
+    var remainingDurationMs = ManualViewportRecenterMaxTotalDurationMs
+
+    fun isTargetVisible(): Boolean = layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+
+    repeat(ManualViewportRecenterMaxPasses) { passIndex ->
+        val delta = resolveApproximateFocusedLineViewportDelta(
+            targetIndex = targetIndex,
+            stableOffsetPx = stableOffsetPx,
+            keepAliveZonePx = keepAliveZonePx
+        )
+        if (abs(delta) <= tolerancePx) {
+            return
+        }
+
+        val requestedDurationMs = if (passIndex == 0) {
+            resolveManualViewportRecenterMainDurationMs(delta)
+        } else {
+            resolveManualViewportRecenterRefineDurationMs(delta)
+        }
+        val durationMillis = requestedDurationMs.coerceAtMost(remainingDurationMs)
+        if (durationMillis <= 0) {
+            return
+        }
+
+        animateScrollBy(
+            value = delta,
+            animationSpec = tween(
+                durationMillis = durationMillis,
+                easing = ManualViewportRecenterEasing
+            )
+        )
+        remainingDurationMs = (remainingDurationMs - durationMillis).coerceAtLeast(0)
+
+        if (isTargetVisible()) {
+            val exactDelta = resolveApproximateFocusedLineViewportDelta(
+                targetIndex = targetIndex,
+                stableOffsetPx = stableOffsetPx,
+                keepAliveZonePx = keepAliveZonePx
+            )
+            if (abs(exactDelta) <= tolerancePx) {
+                return
+            }
+            if (passIndex == ManualViewportRecenterMaxPasses - 1 ||
+                remainingDurationMs < ManualViewportRecenterRefineMinDurationMs
+            ) {
+                scrollBy(exactDelta)
+                return
+            }
+        }
+    }
+
+    val finalDelta = resolveApproximateFocusedLineViewportDelta(
+        targetIndex = targetIndex,
+        stableOffsetPx = stableOffsetPx,
+        keepAliveZonePx = keepAliveZonePx
+    )
+    if (isTargetVisible()) {
+        if (abs(finalDelta) > tolerancePx) {
+            scrollBy(finalDelta)
+        }
+        return
+    }
+
+    // 这里只保留兜底对齐，且整个过程 placement 仍被压制，不会再触发旧的掉落动画
+    scrollToItem(targetIndex, targetScrollOffset)
 }
 
 private suspend fun LazyListState.realignFocusedLineAfterLayout(
@@ -424,6 +635,9 @@ fun KaraokeLyricsView(
     val scrollInCode = remember { mutableStateOf(false) }
     val lastAutoScrollIndex = remember(lyrics) { mutableStateOf<Int?>(null) }
     val suppressPlacementAnimation = remember(lyrics) { mutableStateOf(true) }
+    val manualViewportRecenterPending = remember(lyrics) { mutableStateOf(false) }
+    val manualViewportRecenterTriggerIndex = remember(lyrics) { mutableStateOf<Int?>(null) }
+    val wasManualScrolling = remember(lyrics) { mutableStateOf(false) }
 
     val isManualScrolling by remember {
         derivedStateOf {
@@ -431,9 +645,34 @@ fun KaraokeLyricsView(
         }
     }
 
-    LaunchedEffect(lyricsFocusState.firstIndex, stableOffsetPx, keepAliveZonePx, layoutCache.size) {
+    LaunchedEffect(isManualScrolling, lyricsFocusState.firstIndex) {
+        if (isManualScrolling) {
+            manualViewportRecenterPending.value = true
+        }
+        if (wasManualScrolling.value && !isManualScrolling && manualViewportRecenterPending.value) {
+            manualViewportRecenterTriggerIndex.value = lyricsFocusState.firstIndex
+        }
+        wasManualScrolling.value = isManualScrolling
+    }
+
+    LaunchedEffect(
+        lyricsFocusState.firstIndex,
+        stableOffsetPx,
+        keepAliveZonePx,
+        layoutCache.size,
+        isManualScrolling
+    ) {
         val firstIndex = lyricsFocusState.firstIndex
-        if (!scrollInCode.value && firstIndex in lyrics.lines.indices) {
+        if (!scrollInCode.value && !isManualScrolling && firstIndex in lyrics.lines.indices) {
+            if (shouldWaitForManualViewportRecenter(
+                    manualViewportRecenterPending = manualViewportRecenterPending.value,
+                    manualViewportRecenterTriggerIndex = manualViewportRecenterTriggerIndex.value,
+                    animateViewportScroll = animateViewportScroll,
+                    currentFocusIndex = firstIndex
+                )
+            ) {
+                return@LaunchedEffect
+            }
             val items = listState.layoutInfo.visibleItemsInfo
             val targetItem = items.firstOrNull { it.index == firstIndex }
             val previousAutoScrollIndex = lastAutoScrollIndex.value
@@ -450,6 +689,30 @@ fun KaraokeLyricsView(
                 previousAutoScrollIndex = previousAutoScrollIndex,
                 targetIndex = firstIndex
             )
+            val useManualViewportRecenter = shouldStartManualViewportRecenter(
+                manualViewportRecenterPending = manualViewportRecenterPending.value,
+                manualViewportRecenterTriggerIndex = manualViewportRecenterTriggerIndex.value,
+                animateViewportScroll = animateViewportScroll,
+                currentFocusIndex = firstIndex
+            )
+            val shouldSuppressPlacement = shouldSuppressFocusedLinePlacementAnimation(
+                useManualViewportRecenter = useManualViewportRecenter,
+                animateViewportScroll = animateViewportScroll,
+                placementSuppressionMs = placementSuppressionMs,
+                targetItemVisible = targetItem != null,
+                scrollMode = scrollMode
+            )
+            val placementSuppressionTailMs = when {
+                useManualViewportRecenter -> ManualViewportRecenterPlacementSuppressionMs
+                !animateViewportScroll &&
+                    targetItem == null &&
+                    scrollMode == FocusedLineScrollMode.Animate -> {
+                    ManualViewportRecenterPlacementSuppressionMs
+                }
+
+                !animateViewportScroll -> placementSuppressionMs
+                else -> 0L
+            }
             val targetScrollOffset = (-stableOffsetPx - keepAliveZonePx).toInt()
             val scrollOffset =
                 targetItem?.let {
@@ -462,9 +725,15 @@ fun KaraokeLyricsView(
                 }
             try {
                 scrollInCode.value = true
-                suppressPlacementAnimation.value =
-                    animateViewportScroll || placementSuppressionMs > 0L
-                if (scrollOffset != null) {
+                suppressPlacementAnimation.value = shouldSuppressPlacement
+                if (useManualViewportRecenter) {
+                    listState.animateFocusedLineManualRecenter(
+                        targetIndex = firstIndex,
+                        targetScrollOffset = targetScrollOffset,
+                        stableOffsetPx = stableOffsetPx,
+                        keepAliveZonePx = keepAliveZonePx
+                    )
+                } else if (scrollOffset != null) {
                     if (scrollOffset != 0f) {
                         if (shouldAnimateVisibleScroll) {
                             // seek/大跳转时，即便目标行还在可见区，也要保留用户手动滚动般的平滑过渡
@@ -497,9 +766,15 @@ fun KaraokeLyricsView(
                         keepAliveZonePx = keepAliveZonePx
                     )
                 }
-                if (!animateViewportScroll && placementSuppressionMs > 0L) {
-                    delay(placementSuppressionMs)
+                if (placementSuppressionTailMs > 0L) {
+                    delay(placementSuppressionTailMs)
                 }
+                if (useManualViewportRecenter) {
+                    manualViewportRecenterPending.value = false
+                    manualViewportRecenterTriggerIndex.value = null
+                }
+            } catch (cancelException: CancellationException) {
+                throw cancelException
             } catch (_: Exception) {
             } finally {
                 scrollInCode.value = false
