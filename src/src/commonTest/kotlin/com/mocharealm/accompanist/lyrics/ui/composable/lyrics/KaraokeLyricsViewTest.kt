@@ -67,6 +67,92 @@ class KaraokeLyricsViewTest {
     }
 
     @Test
+    fun `shouldSuppressFocusedLinePlacementAnimation keeps offscreen animated recovery stable`() {
+        assertEquals(
+            true,
+            shouldSuppressFocusedLinePlacementAnimation(
+                useManualViewportRecenter = true,
+                animateViewportScroll = false,
+                placementSuppressionMs = 0L,
+                targetItemVisible = true,
+                scrollMode = FocusedLineScrollMode.Animate
+            )
+        )
+        assertEquals(
+            true,
+            shouldSuppressFocusedLinePlacementAnimation(
+                useManualViewportRecenter = false,
+                animateViewportScroll = true,
+                placementSuppressionMs = 0L,
+                targetItemVisible = true,
+                scrollMode = FocusedLineScrollMode.Animate
+            )
+        )
+        assertEquals(
+            true,
+            shouldSuppressFocusedLinePlacementAnimation(
+                useManualViewportRecenter = false,
+                animateViewportScroll = false,
+                placementSuppressionMs = 0L,
+                targetItemVisible = false,
+                scrollMode = FocusedLineScrollMode.Animate
+            )
+        )
+        assertEquals(
+            false,
+            shouldSuppressFocusedLinePlacementAnimation(
+                useManualViewportRecenter = false,
+                animateViewportScroll = false,
+                placementSuppressionMs = 0L,
+                targetItemVisible = true,
+                scrollMode = FocusedLineScrollMode.Animate
+            )
+        )
+    }
+
+    @Test
+    fun `manual viewport recenter waits for next focused line before starting`() {
+        assertEquals(
+            true,
+            shouldWaitForManualViewportRecenter(
+                manualViewportRecenterPending = true,
+                manualViewportRecenterTriggerIndex = 8,
+                animateViewportScroll = false,
+                currentFocusIndex = 8
+            )
+        )
+        assertEquals(
+            true,
+            shouldStartManualViewportRecenter(
+                manualViewportRecenterPending = true,
+                manualViewportRecenterTriggerIndex = 8,
+                animateViewportScroll = false,
+                currentFocusIndex = 9
+            )
+        )
+        assertEquals(
+            false,
+            shouldWaitForManualViewportRecenter(
+                manualViewportRecenterPending = false,
+                manualViewportRecenterTriggerIndex = 8,
+                animateViewportScroll = false,
+                currentFocusIndex = 8
+            )
+        )
+    }
+
+    @Test
+    fun `manual viewport recenter durations stay below one second and non linear friendly`() {
+        assertEquals(260, resolveManualViewportRecenterDurationMs(0f))
+        assertEquals(299, resolveManualViewportRecenterDurationMs(300f))
+        assertEquals(536, resolveManualViewportRecenterDurationMs(1_200f))
+        assertEquals(760, resolveManualViewportRecenterDurationMs(5_000f))
+        assertEquals(120, resolveManualViewportRecenterCorrectiveDurationMs(0f))
+        assertEquals(120, resolveManualViewportRecenterCorrectiveDurationMs(300f))
+        assertEquals(180, resolveManualViewportRecenterCorrectiveDurationMs(5_000f))
+    }
+
+    @Test
     fun `shouldAnimateVisibleFocusedLineScroll only animates large visible seek jumps`() {
         assertEquals(
             false,
