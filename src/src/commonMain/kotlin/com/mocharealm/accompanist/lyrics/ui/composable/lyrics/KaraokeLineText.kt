@@ -27,12 +27,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -88,7 +88,7 @@ private fun createLineGradientBrush(
     if (totalWidth <= 0f) {
         val isFinished = currentTimeMs >= lineLayout.last().syllable.end
         val color = if (isFinished) activeColor else inactiveColor
-        return Brush.horizontalGradient(listOf(color, color))
+        return SolidColor(color)
     }
 
     val firstSyllableStart = rowData.firstSyllableStart
@@ -457,7 +457,7 @@ fun KaraokeLineText(
                     tween(
                         600
                     )
-                ) + expandVertically(tween(600)),
+                ) + expandVertically(tween(600), if (isBefore) Alignment.Top else Alignment.Bottom),
                 exit = scaleOut(
                     tween(600), transformOrigin = TransformOrigin(
                         if (isRightAligned) 1f else 0f, if (isBefore) 1f else 0f
@@ -466,7 +466,7 @@ fun KaraokeLineText(
                     tween(
                         600
                     )
-                ) + shrinkVertically(tween(600)),
+                ) + shrinkVertically(tween(600), if (isBefore) Alignment.Top else Alignment.Bottom),
             ) {
                 LyricsLineItem(
                     isFocused = true,
