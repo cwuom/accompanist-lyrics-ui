@@ -22,13 +22,16 @@ This repository hosts the `lyrics-ui` code.
 
 - **🎤 Multi-Voice & Duet Support**: Effortlessly display lyrics for multiple singers.
 
-- **🎶 Accompaniment Line Support**: Styles main vocals from accompaniment lines.
+- **🎶 Accompaniment Line Support**: Renders accompaniment lines separately from main vocals.
 
 - **⚡️ High-Performance Rendering**: Engineered for buttery-smooth animations and low overhead, ensuring a great user experience even on complex lyrics.
 
 ## 🚀 Installation
 
-Add the dependency to your `build.gradle.kts`:
+NeriPlayer consumes this fork as the local `:accompanist-lyrics-ui` module mapped to this
+submodule's `src` directory; no Maven dependency is needed inside NeriPlayer.
+
+External projects that want the upstream published artifact can use:
 
 ```kotlin
 dependencies {
@@ -36,11 +39,12 @@ dependencies {
 }
 ```
 
-*Replace `VERSION` with the latest version from Maven Central.*
+*Replace `VERSION` with an upstream version from Maven Central. The published artifact may not
+contain NeriPlayer fork-only rendering changes.*
 
 ## ✅ Todo
 
-- [ ] Spring animations for `LazyList` items when scrolling
+- [x] Spring placement animations for lyric list items during automatic scrolling
 - [ ] Extract animation parameters from `KaraokeLineText`
 - [ ] More precise animation parameters from Apple
 - [ ] Mesh gradient/Image distortion `FlowingLightBackground` animation
