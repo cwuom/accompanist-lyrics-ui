@@ -884,6 +884,12 @@ fun KaraokeLyricsView(
 
                             val showDotsInterlude = lyricsFocusState.activeInterludeIndex == index
                             val showDotsIntro = lyricsFocusState.activeIntro && index == 0
+                            val lineRenderTimeProvider =
+                                if (isCurrentFocusLine || showDotsInterlude || showDotsIntro) {
+                                    renderTimeProvider
+                                } else {
+                                    timeProvider
+                                }
 
                             AnimatedVisibility(showDotsInterlude || showDotsIntro) {
                                 KaraokeBreathingDots(
@@ -894,7 +900,7 @@ fun KaraokeLyricsView(
                                     },
                                     startTimeMs = previousLine?.end ?: 0,
                                     endTimeMs = if (showDotsIntro) firstLine!!.start else line.start,
-                                    currentTimeProvider = renderTimeProvider,
+                                    currentTimeProvider = lineRenderTimeProvider,
                                     defaults = breathingDotsDefaults,
                                     modifier = Modifier.padding(vertical = 12.dp)
                                 )
@@ -928,7 +934,7 @@ fun KaraokeLyricsView(
                                             KaraokeLineText(
                                                 line = line,
                                                 currentTimeProvider = timeProvider,
-                                                renderTimeProvider = renderTimeProvider,
+                                                renderTimeProvider = lineRenderTimeProvider,
                                                 normalLineTextStyle = stableNormalTextStyle,
                                                 accompanimentLineTextStyle = stableAccompanimentTextStyle,
                                                 phoneticTextStyle = stablePhoneticTextStyle,

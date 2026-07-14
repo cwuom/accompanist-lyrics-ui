@@ -58,8 +58,18 @@ fun ModernKaraokeLyricsView(
     blurDelta: Float = 2.6f,
     topFadeLength: Dp = 20.dp,
     bottomFadeLength: Dp = 100.dp,
-    showDebugRectangles: Boolean = false
+    showDebugRectangles: Boolean = false,
+    useAdditiveBlend: Boolean = true
 ) {
+    val resolvedModifier = if (useAdditiveBlend) {
+        modifier.graphicsLayer {
+            blendMode = BlendMode.Plus
+            compositingStrategy = CompositingStrategy.Offscreen
+        }
+    } else {
+        modifier
+    }
+
     KaraokeLyricsView(
         listState = listState,
         lyrics = lyrics,
@@ -67,10 +77,7 @@ fun ModernKaraokeLyricsView(
         renderCurrentPosition = renderCurrentPosition,
         onLineClicked = onLineClicked,
         onLinePressed = onLinePressed,
-        modifier = modifier.graphicsLayer {
-            blendMode = BlendMode.Plus
-            compositingStrategy = CompositingStrategy.Offscreen
-        },
+        modifier = resolvedModifier,
         normalLineTextStyle = normalLineTextStyle,
         accompanimentLineTextStyle = accompanimentLineTextStyle,
         textColor = textColor,
