@@ -627,9 +627,11 @@ fun KaraokeLineText(
                 Text(
                     text = translation,
                     color = activeColor.copy(0.4f),
-                    modifier = Modifier.graphicsLayer {
-                        this.blendMode = blendMode
-                    },
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .graphicsLayer {
+                            this.blendMode = blendMode
+                        },
                     textAlign = translationTextAlign
                 )
             }
@@ -641,9 +643,11 @@ fun KaraokeLineText(
                     text = phonetic,
                     style = phoneticTextStyle,
                     color = activeColor.copy(alpha = 0.6f),
-                    modifier = Modifier.graphicsLayer {
-                        this.blendMode = blendMode
-                    },
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .graphicsLayer {
+                            this.blendMode = blendMode
+                        },
                     textAlign = translationTextAlign
                 )
             }

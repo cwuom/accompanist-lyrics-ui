@@ -39,10 +39,10 @@ fun SyncedLineText(
                 Text(
                     text = it,
                     color = textColor.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 6.dp),
                     textAlign = if (isLineRtl) TextAlign.End else TextAlign.Start
                 )
             }
         }
     }
 }
-
