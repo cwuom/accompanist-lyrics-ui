@@ -22,6 +22,13 @@ class KaraokeLyricsViewTest {
     }
 
     @Test
+    fun `Japanese lyric translation top padding only applies to kana lyrics`() {
+        assertEquals(3f, resolveJapaneseLyricTranslationTopPadding("昨日の僕守る為に").value, 0f)
+        assertEquals(0f, resolveJapaneseLyricTranslationTopPadding("只是为了守护昨天的我").value, 0f)
+        assertEquals(0f, resolveJapaneseLyricTranslationTopPadding("Let it rain").value, 0f)
+    }
+
+    @Test
     fun `resolveFocusedLinePlacementSuppressionMs keeps jump transitions suppressed longer`() {
         assertEquals(
             80L,

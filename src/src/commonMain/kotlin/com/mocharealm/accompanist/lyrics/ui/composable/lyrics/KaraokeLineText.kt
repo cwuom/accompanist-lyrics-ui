@@ -431,6 +431,9 @@ fun KaraokeLineText(
     }
 
     val mainLine = line as? KaraokeLine.MainKaraokeLine
+    val plainLineText = remember(line.syllables) {
+        line.syllables.joinToString(separator = "") { it.content }
+    }
     val accompanimentLinesBeforeMain =
         mainLine?.accompanimentLines?.filter { it.start < line.start }.orEmpty()
     val accompanimentLinesAfterMain =
@@ -628,7 +631,7 @@ fun KaraokeLineText(
                     text = translation,
                     color = activeColor.copy(0.4f),
                     modifier = Modifier
-                        .padding(top = 6.dp)
+                        .padding(top = resolveJapaneseLyricTranslationTopPadding(plainLineText))
                         .graphicsLayer {
                             this.blendMode = blendMode
                         },
@@ -644,7 +647,6 @@ fun KaraokeLineText(
                     style = phoneticTextStyle,
                     color = activeColor.copy(alpha = 0.6f),
                     modifier = Modifier
-                        .padding(top = 6.dp)
                         .graphicsLayer {
                             this.blendMode = blendMode
                         },

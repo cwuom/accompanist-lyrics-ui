@@ -39,7 +39,9 @@ fun SyncedLineText(
                 Text(
                     text = it,
                     color = textColor.copy(alpha = 0.6f),
-                    modifier = Modifier.padding(top = 6.dp),
+                    modifier = Modifier.padding(
+                        top = resolveJapaneseLyricTranslationTopPadding(line.content)
+                    ),
                     textAlign = if (isLineRtl) TextAlign.End else TextAlign.Start
                 )
             }
