@@ -454,6 +454,7 @@ fun KaraokeLyricsView(
     showTranslation: Boolean = true,
     showPhonetic: Boolean = true,
     animateViewportScroll: Boolean = false,
+    userScrollEnabled: Boolean = true,
     focusedLineScale: Float = 1f,
     unfocusedLineScale: Float = 0.98f,
     activeLineAlpha: Float = 1f,
@@ -786,6 +787,7 @@ fun KaraokeLyricsView(
         Box(modifier = modifier.clipToBounds()) {
             LazyColumn(
                     state = listState,
+                    userScrollEnabled = userScrollEnabled,
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
